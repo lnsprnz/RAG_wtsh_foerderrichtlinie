@@ -2,7 +2,11 @@ from langchain_community.document_loaders.pdf import PyPDFDirectoryLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings.sentence_transformer import SentenceTransformerEmbeddings
 from langchain_community.vectorstores import Chroma
+from langchain_core.prompts.prompt import PromptTemplate
+from langchain.chains.retrieval_qa.base import RetrievalQA
 from langchain_community.llms.ollama import Ollama
+from langchain.callbacks.manager import CallbackManager
+from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
 import streamlit as st
 from llama3.llama.generation import Llama
 
@@ -48,16 +52,29 @@ def app():
 
     user_query = st.text_input("Enter your search query:")
 
-    if st.button('Start Search'):
-        db = Chroma(collection_name="embeddings", persist_directory="embeddings",embedding_function=embedding_function)
-        if db and user_query:
-            try:
-                # Assuming db has a method similarity_search that returns search results
-                result = db.similarity_search_by_vector(get_embedding(user_query), 10)
-                if result:
-                    for i in result:
+    template = """"Du bist ein professioneller Berater welcher Unternehmen bei der
+     Auswahl von Förderprogrammen begleitet. Du sprichst deutsch. Begrenze die Antworten auf 240 Satzeichen. 
+     Hier sind relevante Informationen: {context}
+     Frage: {question}
+     Antwort: """
 
-                        st.write(f"{i.page_content}{i.metadata} \n ___________________")  # Adjust based on how your results are structured
+    QA_CHAIN_PROMPT = PromptTemplate(input_variables=["context","question"],template=template)
+    llm = Ollama(model="llama3",callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]))
+    db = Chroma(collection_name="embeddings", persist_directory="embeddings", embedding_function=embedding_function)
+
+    qa_chain = RetrievalQA.from_chain_type(
+        llm=llm,
+        retriever=db.as_retriever(),
+        return_source_documents=True,
+        chain_type_kwargs={"prompt": QA_CHAIN_PROMPT})
+
+    if st.button('Start Search'):
+
+        result = qa_chain({"query": user_query})
+        if user_query and result:
+            try:
+                if result:
+                        st.write(result)  # Adjust based on how your results are structured
                 else:
                     st.write("No results found.")
             except Exception as e:
