@@ -52,14 +52,15 @@ def app():
 
     user_query = st.text_input("Enter your search query:")
 
-    template = """"Du bist ein professioneller Berater welcher Unternehmen bei der
+    template = """"<|begin_of_text|><|start_header_id|>user<|end_header_id|>Du bist ein professioneller Berater welcher Unternehmen bei der
      Auswahl von Förderprogrammen begleitet. Du sprichst deutsch. Begrenze die Antworten auf 240 Satzeichen. 
      Hier sind relevante Informationen: {context}
      Frage: {question}
-     Antwort: """
+     <|eot_id|> 
+     <|start_header_id|>assistant<|end_header_id|>"""
 
     QA_CHAIN_PROMPT = PromptTemplate(input_variables=["context","question"],template=template)
-    llm = Ollama(model="llama3",callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]))
+    llm = Ollama(model="llama3",callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]),stop=["<|eot_id|>"],)
     db = Chroma(collection_name="embeddings", persist_directory="embeddings", embedding_function=embedding_function)
 
     qa_chain = RetrievalQA.from_chain_type(
