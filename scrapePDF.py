@@ -74,7 +74,7 @@ def scrape_and_download(urls, download_dir):
 
 
 # Directory to store downloaded PDFs
-download_directory = "downloaded_pdfs"  # Ensure this path is correctly set according to your file system
+download_directory = "downloaded_pdfs"
 
 # Scrape and download PDFs
 scrape_and_download(urls, download_directory)
