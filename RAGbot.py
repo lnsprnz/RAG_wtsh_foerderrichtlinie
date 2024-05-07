@@ -79,6 +79,7 @@ def build_retriever(db, k, fetch_k,  lambda_mult):
     retriever = db.as_retriever(search_type="mmr", search_kwargs={"k": k, "fetch_k": fetch_k,"lambda_mult": lambda_mult})
     return retriever
 
+
 def build_QA_Chain (template, selected_llm_model, stop_sign, retriever):
     # Define Prompt Template
     Prompt_Template = PromptTemplate(input_variables=["context", "input"],template=template )
