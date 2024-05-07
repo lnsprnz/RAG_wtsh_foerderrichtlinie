@@ -11,7 +11,6 @@ from langchain.chains import create_retrieval_chain
 import streamlit as st
 import os
 import shutil
-from chromadb.api.client import SharedSystemClient
 from scrapePDF import scrape_and_download
 import time
 import logging
@@ -100,7 +99,6 @@ def invoke_QA_Chain(chain, user_query):
 def close_db (db):
     # delet chroma instanc so that a revectorisation could be done https://github.com/langchain-ai/langchain/discussions/17554
     db._client._system.stop()
-    SharedSystemClient._identifer_to_system.pop(db._client._identifier, None)
     return None
 
 def setup_logging():
