@@ -3,20 +3,18 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings.sentence_transformer import SentenceTransformerEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_core.prompts.prompt import PromptTemplate
-from langchain.chains.retrieval_qa.base import RetrievalQA
 from langchain_community.llms.ollama import Ollama
 from langchain.callbacks.manager import CallbackManager
 from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains import create_retrieval_chain
 import streamlit as st
 import os
 import shutil
 from chromadb.api.client import SharedSystemClient
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain.chains import create_retrieval_chain
-from langchain_core.prompts.base import BasePromptTemplate
 from scrapePDF import scrape_and_download
-from langchain_core.runnables import RunnableParallel, RunnablePassthrough
-from langchain_core.prompts import ChatPromptTemplate
+import time
+import logging
 
 urls = [
     'https://wtsh.de/de/foerderprogramme',
@@ -35,10 +33,13 @@ urls = [
     'https://wtsh.de/de/energiewende-foerderaufruf',
     'https://wtsh.de/de/aufbau-einer-nachhaltigen-wasserstoffwirtschaft---wasserstoffrichtlinie'
 ]
-templatePhi3 = """"Du bist ein professioneller Berater welcher Unternehmen bei der
- Auswahl von Förderprogrammen begleitet. Du sprichst deutsch. Begrenze die Antworten auf 100 Satzzeichen.
- Nutze diese Informationen: {context}
- Frage: {input}
+templatePhi3 = """" 
+***Instruction***
+Persona: Professioneller Förderberater
+Sprache: deutsch
+Länge der Antworten: 150 Wörter
+ Beantworte diese Frage: {input} 
+ Mit diesen Informationen:{context}
  Antwort:
  <|end|>"""
 templateLlama3 = """<|begin_of_text|><|start_header_id|>Benutzer<|end_header_id|>
@@ -74,21 +75,15 @@ def re_process_documents(chunk_size, chunk_overlap):
     db.persist()
     return db
 
-def debug_retriever(user_query):
-    db = Chroma(collection_name="embeddings", persist_directory="embeddings", embedding_function=embedding_function)
-    retriever = db.as_retriever(search_type="mmr", search_kwargs={"k": 15, "fetch_k": 100, })
-    result = retriever.invoke(user_query)
-    return result
+def build_retriever(db, k, fetch_k,  lambda_mult):
+    retriever = db.as_retriever(search_type="mmr", search_kwargs={"k": k, "fetch_k": fetch_k,"lambda_mult": lambda_mult})
+    return retriever
 
-def build_QA_Chain (template, selected_llm_model, stop_sign):
+def build_QA_Chain (template, selected_llm_model, stop_sign, retriever):
     # Define Prompt Template
     Prompt_Template = PromptTemplate(input_variables=["context", "input"],template=template )
     #Define llm
     llm = Ollama(model=selected_llm_model, callback_manager=CallbackManager([StreamingStdOutCallbackHandler()]),stop=[stop_sign],)
-    #Define the localy saved db as retriever
-    db = Chroma(collection_name="embeddings", persist_directory="embeddings", embedding_function=embedding_function)
-    retriever = db.as_retriever(search_type="mmr", search_kwargs ={"k":6})
-
 
     #Build Chain
     combine_docs_chain = create_stuff_documents_chain(
@@ -99,13 +94,22 @@ def build_QA_Chain (template, selected_llm_model, stop_sign):
     return chain
 def invoke_QA_Chain(chain, user_query):
     result = chain.invoke({"input": user_query})
+    return result
+
+def close_db (db):
     # delet chroma instanc so that a revectorisation could be done https://github.com/langchain-ai/langchain/discussions/17554
     db._client._system.stop()
     SharedSystemClient._identifer_to_system.pop(db._client._identifier, None)
-    return chain
+    return None
+
+def setup_logging():
+    # Configure logging
+    logging.basicConfig(filename='app.log', level=logging.INFO,
+                        format='%(asctime)s - %(levelname)s - %(message)s')
 
 def app():
 
+    setup_logging()
     with st.sidebar:
         llm_models = ["llama3", "phi3"]
         st.header("Einstellung")
@@ -126,7 +130,7 @@ def app():
         st.subheader("Retriever")
         #Change the dynamics of the mmr retriever
         k = st.slider ("k", value=4, min_value=1, max_value=40, step=1)
-        k_fetch = st.slider ("k_fetch",  value=20, min_value=20, max_value=350, step=1)
+        fetch_k = st.slider ("fetch_k",  value=20, min_value=20, max_value=350, step=1)
         lambda_mult = st.slider ("lambda_mult", value=0.5, min_value=0.0, max_value=1.0, step=0.01)
 
         st.divider()
@@ -143,12 +147,8 @@ def app():
 
     user_query = st.text_input("Wie kann ich Ihnen weiterhelfen?")
 
-    if st.button ('check retrieval'):
-        result = debug_retriever(user_query)
-        st.write (result)
-
     if selected_llm_model and st.button('Start Search'):
-
+        start_time = time.time()
         if selected_llm_model == "llama3":
             template = templateLlama3
             stop_sign = "<|eot_id|>"
@@ -156,13 +156,19 @@ def app():
             template = templatePhi3
             stop_sign = "<|end|>"
 
-        chain = st.session_state.build_QA_Chain(template, selected_llm_model, stop_sign)
+        db = Chroma(collection_name="embeddings", persist_directory="embeddings", embedding_function=embedding_function)
+        retriever = build_retriever(db, k, fetch_k, lambda_mult)
+        chain = build_QA_Chain(template, selected_llm_model, stop_sign, retriever)
         result = invoke_QA_Chain(chain, user_query)
+        time_taken = time.time() - start_time
+        close_db(db)
 
         if user_query and result:
             try:
                 if result:
                         st.write(result)  # Adjust based on how your results are structured
+                        logging.info(
+                            f"Query: {user_query}, Result: {result}, Time: {time_taken}s, Parameters: Chunk Size: {chunk_size}, Chunk Overlap: {chunk_overlap}, k: {k}, fetch_k: {fetch_k}, lambda_mult: {lambda_mult}, LLM: {selected_llm_model}")
                 else:
                     st.write("No results found.")
             except Exception as e:
